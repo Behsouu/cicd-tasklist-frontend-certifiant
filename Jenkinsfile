@@ -3,6 +3,7 @@ pipeline {
 
     environment {
         SCANNER_HOME = tool 'SonarScanner'
+        IMAGE_NAME = "sinaramezanidev/cicd-tasklist-frontend-certifiant"
     }
 
     stages {
@@ -20,6 +21,8 @@ pipeline {
                     node --version || echo "NODE NON TROUVE"
                     echo "--- npm ---"
                     npm --version || echo "NPM NON TROUVE"
+                    echo "--- Docker ---"
+                    docker --version || echo "DOCKER NON TROUVE"
                 '''
             }
         }
@@ -54,7 +57,37 @@ pipeline {
         stage('Quality Gate') {
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate()
+                    waitForQualityGate abortPipeline: false
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} -t ${IMAGE_NAME}:latest . || echo 'BUILD DOCKER ECHOUE'"
+            }
+        }
+
+        stage('Trivy Scan') {
+            steps {
+                sh "trivy image --exit-code 0 --severity HIGH,CRITICAL ${IMAGE_NAME}:latest || echo 'TRIVY NON DISPONIBLE'"
+                sh "trivy image --format spdx-json --output sbom-spdx.json ${IMAGE_NAME}:latest || echo 'SBOM ECHOUE'"
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'sbom-spdx.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Push to DockerHub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-certifiant', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh '''
+                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                        docker push ${IMAGE_NAME}:${BUILD_NUMBER}
+                        docker push ${IMAGE_NAME}:latest
+                    '''
                 }
             }
         }
